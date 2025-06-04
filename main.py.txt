@@ -1,0 +1,116 @@
+﻿
+import logging
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
+import os
+
+# Состояния
+GOAL, TARIFF, NAME, PHONE, CITY, DESCRIPTION, CONTACT, CONFIRM = range(8)
+
+# Токен Telegram
+TOKEN = os.getenv("7669134121:AAEJfFPOk-Br92s74tcGXW5Fb1izDC7qRPM")
+
+# Подключение к Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+client = gspread.authorize(creds)
+sheet = client.open_by_key("1JyMp0g6krlalSWZcduOwFE_A1C8Ut9WiQSMOJR9UXsw").sheet1
+
+# Логирование
+logging.basicConfig(level=logging.INFO)
+
+# Тарифы
+tariffs = {
+    "Базовый (5 000 ₽)": "Входит:\n- Фото объекта\n- Аналитика\n- Консультация\n- Объявление\n- Помощь с рекламой\n- Чек-лист\n- Рекомендации",
+    "Премиум (10 000 ₽)": "Всё из базового и:\n- Шаблоны документов\n- Помощь с показами\n- Инструкции по переговорам\n- Поддержка"
+}
+
+# Хендлеры
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_keyboard = [["Продать недвижимость", "Подобрать новостройку"]]
+    await update.message.reply_text("Выберите цель обращения:", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return GOAL
+
+async def goal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["goal"] = update.message.text
+    reply_keyboard = [["Базовый (5 000 ₽)", "Премиум (10 000 ₽)"]]
+    await update.message.reply_text("Выберите тариф:", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return TARIFF
+
+async def tariff(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["tariff"] = update.message.text
+    await update.message.reply_text(f"Что входит в тариф:\n{tariffs[update.message.text]}\n\nВведите имя:")
+    return NAME
+
+async def name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["name"] = update.message.text
+    await update.message.reply_text("Введите телефон:")
+    return PHONE
+
+async def phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["phone"] = update.message.text
+    await update.message.reply_text("Укажите город / район:")
+    return CITY
+
+async def city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["city"] = update.message.text
+    await update.message.reply_text("Опишите ваш запрос:")
+    return DESCRIPTION
+
+async def description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["description"] = update.message.text
+    await update.message.reply_text("Удобный способ связи:")
+    return CONTACT
+
+async def contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["contact"] = update.message.text
+    reply_keyboard = [["Да", "Нет"]]
+    await update.message.reply_text("Вы подтверждаете согласие с офертой?", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True))
+    return CONFIRM
+
+async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["confirm"] = update.message.text
+    row = [
+        datetime.now().strftime("%d/%m/%Y %H:%M"),
+        context.user_data["name"],
+        context.user_data["phone"],
+        context.user_data["city"],
+        context.user_data["goal"],
+        context.user_data["tariff"],
+        context.user_data["description"],
+        context.user_data["contact"],
+        context.user_data["confirm"]
+    ]
+    sheet.append_row(row)
+    await update.message.reply_text("Спасибо! Ваша заявка отправлена.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Заявка отменена.", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END
+
+def main():
+    app = Application.builder().token(TOKEN).build()
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            GOAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal)],
+            TARIFF: [MessageHandler(filters.TEXT & ~filters.COMMAND, tariff)],
+            NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, name)],
+            PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, phone)],
+            CITY: [MessageHandler(filters.TEXT & ~filters.COMMAND, city)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description)],
+            CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, contact)],
+            CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    app.add_handler(conv_handler)
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+
